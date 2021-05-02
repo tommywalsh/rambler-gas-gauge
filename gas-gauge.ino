@@ -1,4 +1,3 @@
-
 /*
  * This Arduino sketch implements a fuel gauge for a 1966 Rambler. This car has a sensor in the fuel tank 
  * whose resistance varies based on how full the tank is. This sketch uses a voltage divider to measure this 
@@ -13,15 +12,15 @@
  *                  +-------------+ | | +-|RW      |
  *    Accessory-----|Power+    Gnd|-+-+-+-|LED-    |
  *      Chassis-----|Power-     D2|-------|14      |
- *  Fuel Sender--+--|A0         D3|-------|13      |
+ *  Fuel Sender--+--|A1         D3|-------|13      |
  *               |  |           D4|-------|12      |
  *               |  |           D5|-------|11      |
  *               |  |          D11|-------|6       |
  *               |  |          D12|-------|4       |
- *               |  |           5V|-+--+--|VCC LED+|--+
- *               |  +-------------+ |  |  +--------+  |
- *               |                  |  |              |
- *               +---(100 ohm)------+  +----(200 ohm)-+
+ *               |  |           5V|---+---|VCC LED+|--+
+ *               |  +-------------+   |   +--------+  |
+ *               |                    |               |
+ *               +---(100 ohm)--------+----(200 ohm)--+
  */
 
 
@@ -29,45 +28,15 @@
 LiquidCrystal lcd(12,11,5,4,3,2);
 
 
-float estimate_ohmage_from_reading(int reading) {
+float estimate_gallons_remaining_from_reading(float reading) {
   /*
-   * Initial test measurments used a potentiometer to simulate the gas sensor
-   * This was put in series with a 100 ohm resistor to make a voltage divider.
-   * The voltage between the two was then sampled by an analog pin on the Arduino
-   * for a few data points.
+   * Initial testing in the car gives a linear fit formula like this:
+   * (gallons short of full) = (0.0637) * (reading) - 7.3
    * 
-   * resistance | value read
-   *     2      | 80
-   *    26      | 243
-   *    45      | 339
-   *    75      | 443
-   *   102      | 534
-   *    
-   * To get a formula for this, I "normalized" each resistance and value read so that they ranged between 0
-   * and 1. Then, I looked for a curve fit. Theoretically, this should be a hyperbola, but I was able to find
-   * a parabola that fits acceptably well, and is much easier to deal with. The fit ended up being:
-   *    y = 0.5387*x2 + 0.4665*x
+   * The car specs show this to be a 19 gallon tank, so the gallons remaining should be:
+   * (gallons remaining) = 26.3 - (0.0637 * reading)
    */
-  float norm_reading = (reading - 80) / 454.0;
-  float norm_ohmage = 0.5387*norm_reading*norm_reading + 0.4665*norm_reading;
-  return 100.0*norm_ohmage + 2.0;
-}
-
-float get_gallons_for_ohmage(float ohmage) {
-  /*
-   * According to the specs for the car, the fuel sender will register 73 ohms with an empty tank,
-   * and 10 ohms with a full tank. This has not yet been verified with real measurements, but I did measure
-   * 22 ohms at the tank, 24 miles after a fill-up.
-   * 
-   * The specs also say that the tank holds 19 gallons.
-   * 
-   * The below formulas can be tweaked if/when real-world measurements dictate, but for now we'll assume everything
-   * is working to spec, and that the resistance response is linear with gallons in tank.
-   * 
-   * That gives a line slope of -0.3016 and an intercept of 22.016
-   */
-
-   return -0.3016*ohmage + 22.016;  
+   return 26.3 - (0.0637 * reading);
 }
 
 int get_num_display_blocks_for_gallons(float gallons) {
@@ -92,7 +61,6 @@ const uint8_t INVERSE_A = 1;
 const uint8_t INVERSE_S = 2;
 const uint8_t FILLED_BLOCK = 255; // Already defined in display ROM
 const uint8_t EMPTY_BLOCK = 32;   // ASCII space character
-const uint8_t OHMS = 244;         // Greek omega character
 
 
 void show_gas_meter(int num_blocks) {
@@ -145,12 +113,9 @@ void print_number(int number, int digits, int radix) {
 }
 
 
-void show_gas_stats(int sensor_value, float ohmage, float gallons) {
-    lcd.setCursor(0,1);
+void show_gas_stats(int row, int sensor_value, float gallons) {
+    lcd.setCursor(0,row);
     print_number(sensor_value, 4, -1);
-    lcd.write(EMPTY_BLOCK);
-    print_number(ohmage, 4, -1);
-    lcd.write(OHMS);
     lcd.write(EMPTY_BLOCK);
     print_number(gallons*10, 3, 1);
     lcd.write('g');
@@ -163,6 +128,9 @@ bool in_startup_mode = true;
 const int STARTUP_SAMPLE_RATE_MS = 500;
 const int STARTUP_SAMPLE_DURATION_S = 5;
 const int NORMAL_SAMPLE_RATE_S = 5;
+const int SAMPLES_TO_AVERAGE = 10;
+int samples[SAMPLES_TO_AVERAGE];
+int next_sample = 0;
 
 void loop() {
 
@@ -186,14 +154,27 @@ void loop() {
   }
 
   // Sample the voltage divider
-  int sensor_value = analogRead(A0);
+  int sensor_value = analogRead(A1);
+
+  // Update the cache of samples
+  samples[next_sample] = sensor_value;
+  ++next_sample;
+  if (next_sample >= SAMPLES_TO_AVERAGE) {
+    next_sample = 0;
+  }
+
+  // Calculate the average sensor value in the cache
+  float sum = 0.0;
+  for (int i = 0; i < SAMPLES_TO_AVERAGE; ++i) {
+    sum += samples[i];
+  }
+  float average_sensor_value = sum / SAMPLES_TO_AVERAGE;
 
   // Update the gauge
-  float ohmage = estimate_ohmage_from_reading(sensor_value);
-  float gallons = get_gallons_for_ohmage(ohmage);
+  float gallons = estimate_gallons_remaining_from_reading(average_sensor_value);
   int num_blocks = get_num_display_blocks_for_gallons(gallons);
   show_gas_meter(num_blocks);
-  show_gas_stats(sensor_value, ohmage, gallons);
+  show_gas_stats(1, average_sensor_value, gallons);
 
   last_update_time_ms = current_time_ms;
 }
@@ -202,8 +183,8 @@ void loop() {
  * Custom-defined inverse-text characters to spell "GAS" on the meter
  */
 uint8_t inverse_g_def[8] = {
-  B10001, 
-  B01110, 
+  B10001,
+  B01110,
   B01111,
   B01000,
   B01110,
@@ -240,4 +221,10 @@ void setup() {
   lcd.createChar(INVERSE_S, inverse_s_def);
   lcd.begin(16,2);
   Serial.begin(9600);
+
+  // Seed the buffer with copies of an initial reading
+  int sensor_value = analogRead(A1);
+  for (int i = 0; i < SAMPLES_TO_AVERAGE; ++i) {
+    samples[i] = sensor_value;
+  }
 }
