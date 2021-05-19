@@ -128,9 +128,10 @@ bool in_startup_mode = true;
 const int STARTUP_SAMPLE_RATE_MS = 500;
 const int STARTUP_SAMPLE_DURATION_S = 5;
 const int NORMAL_SAMPLE_RATE_S = 5;
-const int SAMPLES_TO_AVERAGE = 10;
-int samples[SAMPLES_TO_AVERAGE];
+const int MAX_SAMPLES = 100;
+int samples[MAX_SAMPLES];
 int next_sample = 0;
+int samples_to_average = 0;
 
 void loop() {
 
@@ -159,16 +160,17 @@ void loop() {
   // Update the cache of samples
   samples[next_sample] = sensor_value;
   ++next_sample;
-  if (next_sample >= SAMPLES_TO_AVERAGE) {
+  samples_to_average = min(samples_to_average + 1, MAX_SAMPLES);
+  if (next_sample >= MAX_SAMPLES) {
     next_sample = 0;
   }
 
   // Calculate the average sensor value in the cache
   float sum = 0.0;
-  for (int i = 0; i < SAMPLES_TO_AVERAGE; ++i) {
+  for (int i = 0; i < samples_to_average; ++i) {
     sum += samples[i];
   }
-  float average_sensor_value = sum / SAMPLES_TO_AVERAGE;
+  float average_sensor_value = sum / samples_to_average;
 
   // Update the gauge
   float gallons = estimate_gallons_remaining_from_reading(average_sensor_value);
@@ -221,10 +223,4 @@ void setup() {
   lcd.createChar(INVERSE_S, inverse_s_def);
   lcd.begin(16,2);
   Serial.begin(9600);
-
-  // Seed the buffer with copies of an initial reading
-  int sensor_value = analogRead(A1);
-  for (int i = 0; i < SAMPLES_TO_AVERAGE; ++i) {
-    samples[i] = sensor_value;
-  }
 }
